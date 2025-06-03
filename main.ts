@@ -1,298 +1,341 @@
-import { App, ItemView, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { CanvasEdgeData, CanvasTextData } from "obsidian/canvas";
+import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf, ItemView } from 'obsidian';
+import 'doodle.css/doodle.css';
 
-// Remember to rename these classes and interfaces!
+// Give your view a unique type
+const VIEW_TYPE_CUSTOM = 'custom-html-view';
+class Plot{
+  vis: boolean
+  parent: StoryChunk|null
+  chunks: Array<StoryChunk>
+  story: Story
+  add: HTMLButtonElement
+  constructor(story: Story, parent: StoryChunk|null=null){
+    this.chunks = []
+    this.parent = parent
+    this.story = story
+    this.vis = true
+  }
+  hide() {
+    this.vis = false
+    this.story.rerender()
+  }
+  show() {
+    this.vis = true
+    this.story.rerender()
+  }  
+  addStoryChunk(storychunk: StoryChunk){
+    this.chunks.push(storychunk)
+    this.story.rerender()
+  }  
+  addStoryChunkAfter(storychunk: StoryChunk, after: StoryChunk){
+    const index = this.chunks.indexOf(after);
+    if (index !== -1) {
+      this.chunks.splice(index + 1, 0, storychunk);
+    }
+    this.story.rerender()
+  }
+  getPrevChunk(chunk: StoryChunk){
+    const index = this.chunks.indexOf(chunk);
+    if (index>0){
+      return this.chunks[index-1]
+    }
+    if (this.parent !== null){
+      return this.parent
+    }
+    return chunk
+  }
+  getNextChunk(chunk: StoryChunk){
+    const index = this.chunks.indexOf(chunk);
+    if (index !== -1 && index < this.chunks.length - 1) {
+      return this.chunks[index + 1];
+    }
+    return this.add
+  }
+  getFirstChunk(){
+    if (this.chunks.length < 1) {
+      return this.parent
+    }  
+    return this.chunks[0]
+  }
+  getLastChunk(){
+    return this.chunks[this.chunks.length-1]
+  }  
+  render(container: Element){
+    if(!this.vis){
+      return
+    }
+    const plotDiv = container.createDiv({cls: 'vertical-stack'})
+    for (const chunk of this.chunks) {
+      const vdiv = plotDiv.createDiv({cls: 'vertical-stack'})
+      if(chunk.subplot !== null){
+        const vhdiv = vdiv.createDiv({cls: 'horizontal-stack'})
+        const chunkdiv = vhdiv.createDiv({cls: 'vertical-stack'})
+        chunk.render(chunkdiv)
+        // vhdiv.createDiv({cls: 'padder'})
+        const plotdiv = vhdiv.createDiv({cls: 'vertical-stack'})
+        chunk.subplot.render(plotdiv)
+      } else {
+        chunk.render(vdiv)
+      }
+      vdiv.createDiv({cls: 'padder'})
+    }
+    this.add = plotDiv.createEl("button", {text: "+"})
+    this.add.addEventListener('click', () => {
+      const newchunk = new StoryChunk(this)
+      this.addStoryChunk(newchunk)
+      newchunk.startEdit()
+    });
+    this.add.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        const newchunk = new StoryChunk(this)
+        this.addStoryChunk(newchunk)
+        newchunk.startEdit()
+      }
+      if (event.key === 'ArrowUp') {
+        this.getLastChunk().focus()
+      }
+      if (event.key === 'ArrowDown') {
+        if (this.parent!==null){
+          this.parent.plot.getNextChunk(this.parent).focus()
+        }
+      }      
+    })
+  }
+}
+class Story{
+  container: Element
+  plot: Plot
+  parent: StoryChunk
+  constructor(container: Element){
+    this.container = container
+    this.plot = new Plot(this)
+    this.rerender()
+  }
 
-interface MyPluginSettings {
-	mySetting: string;
+  rerender(){
+    this.container.empty()
+    const all = this.container.createDiv({cls: 'horizontal-stack'})
+    this.plot.render(all)
+  }
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+class StoryChunk {
+  plot: Plot
+  subplot: Plot | null
+  text: string
+  div: HTMLDivElement
+  btn: HTMLButtonElement
+  edit: HTMLInputElement
+  constructor(plot: Plot, text: string = "") {
+    this.plot = plot
+    this.text = text
+    this.subplot = null
+  }
+  render(container: HTMLDivElement){
+    this.div = container.createEl('div', {cls: 'horizontal-stack'});
+    this.btn = this.div.createEl('button', { text: this.text });
+    this.edit = this.div.createEl('input', { value: this.text, placeholder: "And then..." });
+    this.btn.addEventListener('click', () => {
+      this.startEdit()
+    });
+    this.btn.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        if (event.shiftKey){
+          const newchunk = new StoryChunk(this.plot)
+          this.plot.addStoryChunkAfter(newchunk, this)
+          newchunk.startEdit()
+        } else{
+          event.preventDefault(); // Prevent form submission or newline
+          this.startEdit()  
+        }
+      }
+      if (event.key === 'ArrowUp') {
+        this.plot.getPrevChunk(this).focus()
+      }
+      if (event.key === 'ArrowDown') {
+        this.plot.getNextChunk(this).focus()
+      }
+      if (event.key === 'ArrowLeft') {
+        if(this.plot.parent !== null){
+          this.plot.hide()
+          this.plot.parent.focus()
+        }
+      }
+      if (event.key === 'ArrowRight') {
+        if (event.shiftKey) {
+          if(this.subplot === null){
+            this.subplot = new Plot(this.plot.story, this)
+          }
+          const newchunk = new StoryChunk(this.subplot)
+          this.subplot.addStoryChunk(newchunk)
+          newchunk.startEdit()
+        } else {
+          if(this.subplot === null){
+            this.focus()
+          } else{
+            this.subplot.show()
+            this.subplot.getFirstChunk().focus()
+          }
+        }
+      }      
+    });
+
+    this.edit.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        event.preventDefault(); // Prevent form submission or newline
+        this.doneEdit()
+      }
+    });
+    this.focus()
+    return this.div
+  }
+  startEdit(){
+    this.btn.hide()
+    this.edit.value = this.text
+    this.edit.show()
+    this.edit.focus()
+    this.edit.select()
+  }
+  doneEdit(){
+    if(this.edit.value == ""){
+      this.text = this.edit.placeholder
+    } else {
+      this.text = this.edit.value
+    }
+    this.edit.hide()
+    this.btn.setText(this.text)
+    this.btn.show()
+    this.btn.focus()
+  }
+  focus(){
+    if(this.btn.hidden){
+      this.startEdit()
+    } else{
+      this.doneEdit()
+    }
+  }  
 }
 
 export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+  async onload() {
+    console.log('Loading My Custom Plugin');
 
-	isActiveCanvas(){
-		const active = this.app.workspace.getActiveFile()
-		if (active) {
-			if (active.extension == 'canvas'){
-				return true
-			}
-		}
-		return false
-	}
+    // Register a new view type
+    this.registerView(
+      VIEW_TYPE_CUSTOM,
+      (leaf: WorkspaceLeaf) => new CustomView(leaf)
+    );
 
-	getCanvas(){
-		return this.app.workspace.getActiveFileView().canvas
-	}
+    // Add a ribbon icon to open it
+    this.addRibbonIcon('dice', 'Open Custom View', () => {
+      this.activateView();
+    });
+  }
 
-	genRandomIdForMap(mmap: Map<string, object>){
-		let r = (Math.random() + 1).toString(16).substring(2)
-		while (mmap.has(r)){
-			r = (Math.random() + 1).toString(16).substring(2)	
-		}
-		return r
-	}
+  onunload() {
+    console.log('Unloading My Custom Plugin');
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CUSTOM);
+  }
 
-	random(e: number){
-		let t = [];
-		for (let n = 0; n < e; n++) {
-			t.push((16 * Math.random() | 0).toString(16));
-		}
-		return t.join("");
-	};
-
-	addEdge(canvas: any, node1: any, side1: string, node2: any, side2: string){
-		const allEdgesData: CanvasEdgeData[] = [];
-		const edgeData: CanvasEdgeData = {
-			id: this.random(16),
-			fromSide: 'bottom',
-			fromNode: node1.id,
-			toSide: 'top',
-			toNode: node2.id
-		};
-		const currentData = canvas.getData();
-		currentData.edges = [
-			...currentData.edges,
-			edgeData,
-		];
-
-		canvas.setData(currentData);
-		canvas.requestSave();
-	}
-
-	addCardBelow(canvas: any){
-		const buf=20
-		if (canvas.selection.size!=1){
-			console.log("must select one node")
-			return false
-		}
-		const selected = canvas.selection.values().next().value
-		if (canvas.edgeFrom.data.has(selected)){
-			const below = [...canvas.edgeFrom.get(selected).values()].filter(e=>e.from.side=='bottom')
-			if (below.length > 0){
-				canvas.deselectAll()
-				below[0].to.node.focus()
-				return
-			}
-		}
-		const nx = selected.x
-		const ny = selected.y+selected.height+buf
-		let newnode = canvas.createTextNode({pos:{x: nx, y:ny}, text:"And then..."})
-		this.addEdge(canvas, selected, 'bottom', newnode, 'top')
-	}
-	addCardAbove(canvas: any){
-		const buf=20
-		if (canvas.selection.size!=1){
-			console.log("must select one node")
-			return false
-		}
-		const selected = canvas.selection.values().next().value
-		const below = [...canvas.edges.values()].filter(e=>((e.to.node==selected && e.to.side=='top') || (e.to.node==selected && e.to.side=='top')))
-		if (below.length > 0){
-				canvas.deselectAll()
-				if (below[0].to==selected){
-					console.log(below[0].from.node)
-					canvas.select(below[0].from.node)
-				} else {
-					console.log(below[0].to.node)
-					canvas.select(below[0].to.node)
-				}
-				// canvas.deselectAll()
-				// below[0].to.node.focus()
-				return
-		}
-		const nx = selected.x
-		const ny = selected.y-selected.height-buf
-		let newnode = canvas.createTextNode({pos:{x: nx, y:ny}, text:"And then..."})
-		this.addEdge(canvas, selected, 'top', newnode, 'bottom')
-	}
-	addCardRight(canvas: any){
-		const buf=20
-		if (canvas.selection.size!=1){
-			console.log("must select one node")
-			return false
-		}
-		const selected = canvas.selection.values().next().value
-		if (canvas.edgeFrom.data.has(selected)){
-			const below = [...canvas.edgeFrom.get(selected).values()].filter(e=>e.from.side=='right')
-			if (below.length > 0){
-				canvas.deselectAll()
-				below[0].to.node.focus()
-				return
-			}
-		}
-		const nx = selected.x+selected.width+buf
-		const ny = selected.y
-		let newnode = canvas.createTextNode({pos:{x: nx, y:ny}, text:"And then..."})
-		this.addEdge(canvas, selected, 'right', newnode, 'left')
-	}
-	addCardLeft(canvas: any){
-		const buf=20
-		if (canvas.selection.size!=1){
-			console.log("must select one node")
-			return false
-		}
-		const selected = canvas.selection.values().next().value
-		if (canvas.edgeFrom.data.has(selected)){
-			const below = [...canvas.edgeFrom.get(selected).values()].filter(e=>e.from.side=='left')
-			if (below.length > 0){
-				canvas.deselectAll()
-				below[0].to.node.focus()
-				return
-			}
-		}
-		const nx = selected.x-selected.width-buf
-		const ny = selected.y
-		let newnode = canvas.createTextNode({pos:{x: nx, y:ny}, text:"And then..."})
-		this.addEdge(canvas, selected, 'left', newnode, 'right')
-	}
-
-	async onload() {
-
-		await this.loadSettings();
-
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		this.addCommand({
-			id: 'add_card_below',
-			name: 'Add Card Below',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const canvasView = this.app.workspace.getActiveViewOfType(ItemView);
-				if (canvasView?.getViewType() === "canvas") {
-					const canvas = canvasView.canvas;
-					if (!checking) {
-						this.addCardBelow(canvas)
-					}
-					return true;
-				}
-				return false;
-			}
-		});
-		this.addCommand({
-			id: 'add_card_Left',
-			name: 'Add Card Left',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const canvasView = this.app.workspace.getActiveViewOfType(ItemView);
-				if (canvasView?.getViewType() === "canvas") {
-					const canvas = canvasView.canvas;
-					if (!checking) {
-						this.addCardLeft(canvas)
-					}
-					return true;
-				}
-				return false;
-			}
-		});
-		this.addCommand({
-			id: 'add_card_Above',
-			name: 'Add Card Above',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const canvasView = this.app.workspace.getActiveViewOfType(ItemView);
-				if (canvasView?.getViewType() === "canvas") {
-					const canvas = canvasView.canvas;
-					if (!checking) {
-						this.addCardAbove(canvas)
-					}
-					return true;
-				}
-				return false;
-			}
-		});
-		this.addCommand({
-			id: 'add_card_Right',
-			name: 'Add Card Right',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const canvasView = this.app.workspace.getActiveViewOfType(ItemView);
-				if (canvasView?.getViewType() === "canvas") {
-					const canvas = canvasView.canvas;
-					if (!checking) {
-						this.addCardRight(canvas)
-					}
-					return true;
-				}
-				return false;
-			}
-		});						
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			// console.log('click', evt);
-		});
-
-
-		this.addRibbonIcon('dice', 'Greet', () => {
-			new Notice('Hello, world!');
-		  });
-	}
-
-	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
+  async activateView() {
+    // Detach existing, then open a new leaf
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CUSTOM);
+    await this.app.workspace.getRightLeaf(false).setViewState({
+      type: VIEW_TYPE_CUSTOM,
+      active: true,
+    });
+    this.app.workspace.revealLeaf(
+      this.app.workspace.getLeavesOfType(VIEW_TYPE_CUSTOM)[0]
+    );
+  }
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+// Define the View that renders HTML + JS
+class CustomView extends ItemView {
+  constructor(leaf: WorkspaceLeaf) {
+    super(leaf);
+  }
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+  getViewType() {
+    return VIEW_TYPE_CUSTOM;
+  }
+  getDisplayText() {
+    return 'Outliner View';
+  }
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+  async onOpen() {
+    // Clear any old contents
+    this.contentEl.empty();
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+    // Inject your HTML
+    const style = document.createElement('style');
+    style.textContent = `
+      .vertical-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 0px;         /* spacing between items */
+        padding: 0px;      /* optional padding */
+        align-items: flex-start; /* prevent stretching */
+      }
+      .horizontal-stack {
+        display: flex;
+        flex-direction: row;
+        gap: 0px;         /* spacing between items */
+        padding: 0px;      /* optional padding */
+        align-items: flex-start; /* prevent stretching */
+      }
+      
+      .padder {
+        width: 10px;
+        height: 10px;
+      }
+      .line {
+        width: 2px;
+        background: black;
+      }
+      .button-wrapper {
+        position: relative;
+        display: flex;
+        justify-content: center;
+      }
+    `;
+    document.head.appendChild(style);
+    this.contentEl.createEl('h2', { text: '🕸️ Outliner' });
+    const container = this.contentEl.createEl('div', {
+      attr: { id: 'my-container' }
+    });
+    container.classList.add("button-wrapper")
+    
+    const story = new Story(container)
 
-	display(): void {
-		const {containerEl} = this;
+    // container.appendChild(s.container)
 
-		containerEl.empty();
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+    // const input = container.createEl('input');
+    // input.placeholder = 'And then...';
+    // input.addClass('input-box');
+
+    // input.addEventListener('keydown', (event: KeyboardEvent) => {
+    //   if (event.key === 'Enter') {
+    //     event.preventDefault(); // Prevent form submission or newline
+    //     this.createThing(container, input)
+    //     input.value = '';
+    //   }
+    //   if (event.key === 'ArrowUp') {
+    //     event.preventDefault(); // Prevent form submission or newline
+    //     this.focusPrevFocusable(input)
+    //     // input.hide()
+    //   }
+    //   // console.log(event.key)
+    // });
+
+
+    // If you have more complex JS, you can dynamically load it.
+    // e.g. append a <script> tag that points to your bundled code.
+  }
+
+  async onClose() {
+    // Clean up if needed
+  }
 }
