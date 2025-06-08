@@ -1,8 +1,33 @@
-/*
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+  
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(0, 200px));
+    grid-auto-rows: auto; /* Ensures row grows to fit content */
+    gap: 30px;
+    width: fit-content;
+    height: fit-content;
+  }
+  
+  .grid button {
+    width: 100%;
+    min-width: 50px;
+    max-width: 150px;
+    padding: 10px;
+    white-space: normal;           /* Allows text wrapping */
+    word-break: break-word;
+    overflow-wrap: break-word;
+    text-align: center;
+    box-sizing: border-box;        /* Includes padding in size */
+    height: auto;                  /* Let height grow with content */
+  }
 
-If your plugin does not need CSS, delete this file.
-
-*/
+  .grid textarea {
+    width: 100%;
+    min-width: 50px;
+    max-width: 150px;
+    height: auto;
+    word-break: break-word;
+    overflow-wrap: break-word;    
+  }
+  
